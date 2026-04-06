@@ -29,9 +29,14 @@ python3 neural_sdf_train.py
 実行すると以下が生成されます。
 
 - `generated/sdf_sphere_model.pt`: 学習済み重み
-- `generated/neural_sdf_mesh.obj`: Marching Cubesで抽出した0レベルセットのメッシュ
+- `generated/mesh.obj`: Marching Cubesで抽出した0レベルセットのメッシュ
 
 ## メモ
 
 - Eikonal項は `|grad f|-1` を最小化し、SDFらしい勾配場を維持して表面品質を改善します。
 - メッシュ抽出は `scikit-image` の `measure.marching_cubes` を使用しています。
+
+
+
+これを参考にしてる
+https://chatgpt.com/share/69d374a4-0498-83e8-a280-45436487a289

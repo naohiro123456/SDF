@@ -102,10 +102,9 @@ def evaluate_grid_sdf(
 def save_obj(vertices, faces, file_path: str) -> None:
     with open(file_path, "w", encoding="utf-8") as f:
         for v in vertices:
-            f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+            f.write(f"v {v[0]} {v[1]} {v[2]}\n")
         for face in faces:
-            # OBJ is 1-indexed.
-            f.write(f"f {int(face[0]) + 1} {int(face[1]) + 1} {int(face[2]) + 1}\n")
+            f.write(f"f {face[0] + 1} {face[1] + 1} {face[2] + 1}\n")
 
 
 def extract_mesh_marching_cubes(
@@ -114,7 +113,7 @@ def extract_mesh_marching_cubes(
     bound: float = 1.3,
     level: float = 0.0,
     device: str = "cpu",
-    out_path: str = "neural_sdf_mesh.obj",
+    out_path: str = "mesh.obj",
 ) -> None:
     sdf_grid = evaluate_grid_sdf(model, resolution=resolution, bound=bound, device=device)
     sdf_np = sdf_grid.detach().cpu().numpy()
@@ -155,7 +154,7 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = output_dir / "sdf_sphere_model.pt"
-    mesh_path = output_dir / "neural_sdf_mesh.obj"
+    mesh_path = output_dir / "mesh.obj"
 
     model = train(
         epochs=1200,
