@@ -1,3 +1,4 @@
+import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -39,6 +40,44 @@ def gt_sdf_sphere(points: torch.Tensor, radius: float = 1.0) -> torch.Tensor:
     return torch.linalg.norm(points, dim=-1, keepdim=True) - radius
 
 
+def gt_sdf_box(points: torch.Tensor, half_size: torch.Tensor) -> torch.Tensor:
+    """Ground-truth SDF for an axis-aligned box centered at origin."""
+    q = torch.abs(points) - half_size
+    outside = torch.linalg.norm(torch.clamp(q, min=0.0), dim=-1, keepdim=True)
+    inside = torch.clamp(torch.max(q, dim=-1, keepdim=True).values, max=0.0)
+    return outside + inside
+
+
+def translate(points: torch.Tensor, offset: torch.Tensor) -> torch.Tensor:
+    return points - offset
+
+
+def sdf_union(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return torch.minimum(a, b)
+
+
+def gt_sdf_composite(points: torch.Tensor) -> torch.Tensor:
+    """Composite shape: union of sphere and box, then carve with another sphere."""
+    sphere_main = gt_sdf_sphere(translate(points, torch.tensor([-0.25, 0.0, 0.0], device=points.device)), radius=0.7)
+    box_main = gt_sdf_box(
+        translate(points, torch.tensor([0.3, 0.0, 0.0], device=points.device)),
+        half_size=torch.tensor([0.45, 0.35, 0.35], device=points.device),
+    )
+    base = sdf_union(sphere_main, box_main)
+    hole = gt_sdf_sphere(translate(points, torch.tensor([0.15, 0.0, 0.0], device=points.device)), radius=0.22)
+    return torch.maximum(base, -hole)
+
+
+def get_gt_sdf(points: torch.Tensor, shape_type: str, radius: float = 1.0) -> torch.Tensor:
+    if shape_type == "sphere":
+        return gt_sdf_sphere(points, radius=radius)
+    if shape_type == "box":
+        return gt_sdf_box(points, half_size=torch.tensor([0.7, 0.5, 0.45], device=points.device))
+    if shape_type == "composite":
+        return gt_sdf_composite(points)
+    raise ValueError(f"Unsupported shape_type: {shape_type}")
+
+
 def sample_points(num_points: int, bound: float = 1.5, device: str = "cpu") -> torch.Tensor:
     return (torch.rand(num_points, 3, device=device) * 2.0 - 1.0) * bound
 
@@ -48,6 +87,7 @@ def train(
     batch_size: int = 4096,
     lr: float = 1e-3,
     radius: float = 1.0,
+    shape_type: str = "sphere",
     eikonal_weight: float = 0.1,
     device: str = "cpu",
 ) -> SDFNetwork:
@@ -57,7 +97,7 @@ def train(
     for epoch in range(1, epochs + 1):
         points = sample_points(batch_size, device=device)
         points.requires_grad_(True)
-        gt_sdf = gt_sdf_sphere(points, radius=radius)
+        gt_sdf = get_gt_sdf(points, shape_type=shape_type, radius=radius)
 
         pred_sdf = model(points)
         sdf_loss = ((pred_sdf - gt_sdf) ** 2).mean()
@@ -70,7 +110,7 @@ def train(
 
         if epoch % 200 == 0 or epoch == 1:
             print(
-                f"Epoch {epoch:4d} | Total: {loss.item():.6f} "
+                f"Epoch {epoch:4d} | Shape: {shape_type:<9} | Total: {loss.item():.6f} "
                 f"| SDF: {sdf_loss.item():.6f} | Eik: {eik_loss.item():.6f}"
             )
 
@@ -118,15 +158,29 @@ def extract_mesh_marching_cubes(
     sdf_grid = evaluate_grid_sdf(model, resolution=resolution, bound=bound, device=device)
     sdf_np = sdf_grid.detach().cpu().numpy()
 
+    min_sdf = float(sdf_np.min())
+    max_sdf = float(sdf_np.max())
+    iso_level = level
+    if not (min_sdf <= level <= max_sdf):
+        iso_level = min(max(level, min_sdf), max_sdf)
+        print(
+            f"Requested level={level:.4f} is outside SDF range [{min_sdf:.4f}, {max_sdf:.4f}]. "
+            f"Using clamped level={iso_level:.4f}."
+        )
+
     spacing = (2.0 * bound) / (resolution - 1)
-    verts, faces, _, _ = measure.marching_cubes(sdf_np, level=level, spacing=(spacing, spacing, spacing))
+    verts, faces, _, _ = measure.marching_cubes(
+        sdf_np,
+        level=iso_level,
+        spacing=(spacing, spacing, spacing),
+    )
     verts -= bound
 
     save_obj(verts, faces, out_path)
     print(f"Saved mesh to {out_path} (verts={len(verts)}, faces={len(faces)})")
 
 
-def quick_test(model: SDFNetwork, device: str = "cpu") -> None:
+def quick_test(model: SDFNetwork, shape_type: str = "sphere", radius: float = 1.0, device: str = "cpu") -> None:
     model.eval()
     test_points = torch.tensor(
         [
@@ -140,39 +194,54 @@ def quick_test(model: SDFNetwork, device: str = "cpu") -> None:
     )
     with torch.no_grad():
         pred = model(test_points).squeeze(-1)
-        gt = gt_sdf_sphere(test_points).squeeze(-1)
+        gt = get_gt_sdf(test_points, shape_type=shape_type, radius=radius).squeeze(-1)
 
     print("\nQuick test (pred vs gt):")
     for p, p_pred, p_gt in zip(test_points.cpu(), pred.cpu(), gt.cpu()):
         print(f"point={p.numpy()} pred={p_pred.item(): .5f} gt={p_gt.item(): .5f}")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train Neural SDF and export mesh with Marching Cubes.")
+    parser.add_argument("--shape", choices=["sphere", "box", "composite"], default="sphere")
+    parser.add_argument("--epochs", type=int, default=1200)
+    parser.add_argument("--batch-size", type=int, default=4096)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--radius", type=float, default=1.0)
+    parser.add_argument("--eikonal-weight", type=float, default=0.1)
+    parser.add_argument("--resolution", type=int, default=96)
+    parser.add_argument("--bound", type=float, default=1.3)
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     output_dir = Path("generated")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = output_dir / "sdf_sphere_model.pt"
-    mesh_path = output_dir / "mesh.obj"
+    model_path = output_dir / f"sdf_{args.shape}_model.pt"
+    mesh_path = output_dir / f"mesh_{args.shape}.obj"
 
     model = train(
-        epochs=1200,
-        batch_size=4096,
-        lr=1e-3,
-        radius=1.0,
-        eikonal_weight=0.1,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        radius=args.radius,
+        shape_type=args.shape,
+        eikonal_weight=args.eikonal_weight,
         device=device,
     )
-    quick_test(model, device=device)
+    quick_test(model, shape_type=args.shape, radius=args.radius, device=device)
 
     torch.save(model.state_dict(), model_path)
     print(f"\nSaved model to {model_path}")
 
     extract_mesh_marching_cubes(
         model,
-        resolution=96,
-        bound=1.3,
+        resolution=args.resolution,
+        bound=args.bound,
         level=0.0,
         device=device,
         out_path=str(mesh_path),

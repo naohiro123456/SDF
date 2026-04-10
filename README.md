@@ -1,5 +1,5 @@
 
-# Neural SDF (Sphere) サンプル
+# Neural SDF サンプル
 
 このリポジトリは、以下の2段構成でSDFを試せます。
 
@@ -26,15 +26,24 @@ python3 sdf_primitives.py
 python3 neural_sdf_train.py
 ```
 
-実行すると以下が生成されます。
+形状を切り替える例:
 
-- `generated/sdf_sphere_model.pt`: 学習済み重み
-- `generated/mesh.obj`: Marching Cubesで抽出した0レベルセットのメッシュ
+```bash
+python3 neural_sdf_train.py --shape sphere
+python3 neural_sdf_train.py --shape box
+python3 neural_sdf_train.py --shape composite
+```
+
+実行すると以下が生成されます（shapeごと）。
+
+- `generated/sdf_<shape>_model.pt`: 学習済み重み
+- `generated/mesh_<shape>.obj`: Marching Cubesで抽出した0レベルセットのメッシュ
 
 ## メモ
 
 - Eikonal項は `|grad f|-1` を最小化し、SDFらしい勾配場を維持して表面品質を改善します。
 - メッシュ抽出は `scikit-image` の `measure.marching_cubes` を使用しています。
+- `composite` は球とボックスの合成（union）に穴あけ（difference）を入れた複合形状です。
 
 
 
