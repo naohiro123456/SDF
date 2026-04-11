@@ -45,6 +45,19 @@ python3 neural_sdf_train.py --shape composite
 - メッシュ抽出は `scikit-image` の `measure.marching_cubes` を使用しています。
 - `composite` は球とボックスの合成（union）に穴あけ（difference）を入れた複合形状です。
 
+## 3. 保存済みモデルに任意点を問い合わせ
+
+```bash
+python3 query_sdf.py --model-path generated/sdf_sphere_model.pt --point 0 0 0 --point 1 0 0
+```
+
+形状別モデルを使う例:
+
+```bash
+python3 query_sdf.py --model-path generated/sdf_box_model.pt --point 0.2 0.1 0.0
+python3 query_sdf.py --model-path generated/sdf_composite_model.pt --point 0.4 0.0 0.0
+```
+
 
 
 これを参考にしてる
